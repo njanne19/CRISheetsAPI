@@ -2,6 +2,7 @@ var express = require('express');
 var router = express.Router();
 var GoogleSpreadsheet = require('google-spreadsheet');
 var async = require('async');
+var nodemailer = require('nodemailer');
 var JSONSecure = {
   "type": "service_account",
   "project_id": "crisheets-171201",
@@ -16,10 +17,23 @@ var JSONSecure = {
 }
 var maxRows;
 var maxCols;
+var transporter = nodemailer.createTransport({
+  service: 'Gmail',
+  auth: {
+    user: 'spreadsheetnotifs@gmail.com',
+    pass: 'OThEMAnATErYmai'
+  }
+});
+var womenComing = [];
+var openComing = [];
+var womenNotComing = [];
+var openNotComing = [];
+
 /* GET home page. */
 router.get('/', function(req, res, next) {
-  res.render('index');
+res.render('index');
 });
+
 
 module.exports = router;
 
@@ -27,6 +41,10 @@ module.exports = router;
 router.get('/test', function(req, res, next) {
 var doc = new GoogleSpreadsheet('12_A4j3ii-H5m0QpqmknpFAxyUre7FDnKrYwUpeuB-J8');
 var sheet;
+var finalComingWomen = {};
+var finalComingOpen = {};
+var requirement = 0;
+
 
 async.series([
   function setAuth(step) {
@@ -56,73 +74,137 @@ async.series([
     });
   },
   function workingWithCells(step) {
-    sheet.getCells({
+
+    var rowersOptions = {
       'min-row': 4,
-      'max-row': maxRows,
+      'max-row': maxRows, //Defined earlier
       'min-col': 2,
       'max-col': 2,
       'return-empty': true
-    }, function(err, cells) {
-
-      var CellData = {};
+    };
+    var rowers = [];
       //Get Rowers
-      var rowers = {};
+    sheet.getCells(rowersOptions, function(err, cells) {
+      var CellData = {};
       for (var i = 0; i<cells.length; i++) {
-        rowers[i] = cells[i].value;
+        rowers.push(cells[i].value);
       }
-      //Get Who is coming
+    });
+
 
       var date = "6/18" //NEED TO CHANGE DATE TO REAL DATE
 
+      function getWomen (col) {
+        var columnOptions1 = {
+          'min-row': 4,
+          'max-row': maxRows,
+          'min-col': col,
+          'max-col': col,
+          'return-empty': true
+        };
+        return new Promise(function(resolve, reject) {
+          sheet.getCells(columnOptions1, function(err, cells) {
+            for (var i = 0; i<cells.length; i++) {
+              var name = rowers[i];
+              if (cells[i].value === "1") {
+                finalComingWomen[name] = "YES"; //JSON Object defined earlier
+                womenComing.push(name);
+              } else if (cells[i].value === "0") {
+                finalComingWomen[name] = "NO";
+                womenNotComing.push(name);
+              } else {
+                finalComingWomen[name] = "N/A";
+              }
+              if (i == cells.length - 1 ){
+                console.log("This should come first");
+                resolve();
+              }
+            }
+          });
+        });
+      }
 
 
+      function getOpen (col) {
+        var columnOptions2 = {
+          'min-row': 4,
+          'max-row': maxRows,
+          'min-col': col+1,
+          'max-col': col+1,
+          'return-empty': true
+        };
+        return new Promise(function(resolve, reject) {
+          sheet.getCells(columnOptions2, function(err, cells) {
+            for (var i = 0; i<cells.length; i++) {
+              var name = rowers[i];
+              if (cells[i].value === "1") {
+                finalComingOpen[name] = "YES"; //JSON Object defined earlier
+                openComing.push(name);
+              } else if (cells[i].value === "0") {
+                finalComingOpen[name] = "NO";
+                openNotComing.push(name);
+              } else {
+                finalComingOpen[name] = "N/A";
+              }
+              if (i == cells.length - 1 ){
+                console.log("This should come second");
+                resolve();
+              }
+            }
+          });
+        });
+      }
+
+
+      //Finding Column Applicable for each data set, and then grabbing data from Google Sheets API with the column number
       var dateOptions = {
         'min-row': 2,
         'max-row': 2,
         'return-empty': true
       };
-
-      var finalComing = {};
-      var dateColumn = "";
-
       sheet.getCells(dateOptions, function(err, cells) {
         for (var i = 0; i<cells.length; i++) {
           if (date == cells[i].value){
-          dateColumn = cells[i].col;
-          console.log("DateCol " + dateColumn);
+          Promise.all([getWomen(Number(cells[i].col)), getOpen(Number(cells[i].col))]).then(() => {
+            console.log("this should come third");
+            res.json({finalComingOpen, finalComingWomen});
+          }).then(emailSends());
           break;
           }
         }
       });
 
-      var columnOptions = {
-        'min-row': 4,
-        'max-row': maxRows,
-        'min-col': dateColumn,
-        'max-col': dateColumn,
-        'return-empty': true
+
+      // Time to send some emails!
+      var email = "<h1 style='text-align: center;'>Weekly Attendance</h1> <h2>Women's Group</h2><h3>Coming</h3>" + finalComingOpen.toString();
+      function emailSends() {
+      var addressObject = {
+        name: "CRI Attendance Notifier",
+        address: "spreadsheetnotifs@gmail.com"
       };
-
-
-      sheet.getCells(columnOptions, function(err, cells) {
-        for (var i = 0; i<cells.length; i++) {
-          var name = rowers[i.toString()];
-          if (cells[i].value === "1") {
-            finalComing[name] = "Coming for sure";
-          } else if (cells[i].value === "0") {
-            finalComing[name] = "Not coming for sure";
-          } else {
-            finalComing[name] = "Did not fill out spreadsheet/correctly";
-          }
+      var testEmail = "<h1>Hows it going, eh?</h1>";
+      var mailOptions = {
+        from: addressObject,
+        to: "nickjanne7@gmail.com",
+        subject: "CRI Veterans Attendance Week of " + date.toString(),
+        text: testEmail,
+        html: email
+      };
+      transporter.sendMail(mailOptions, function(error, info) {
+        if (error) {
+          console.log(error);
+          res.send('error');
+        } else {
+          res.json(info);
+          console.log("Message sent: " + info.response )
         }
-        res.json(finalComing);
       });
 
+    }
 
 
       step();
 
-    });
   }
 ], function(err) {
   if (err) {
